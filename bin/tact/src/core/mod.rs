@@ -19,7 +19,10 @@ use crate::{
 };
 use nanocodex::{
     AgentEvents, Claude, Model, Nanocodex, NanocodexError, OpenAi, Thinking, Tools, TurnControl,
-    agent::{input::Prompt, session::SessionId},
+    agent::{
+        input::{Prompt, PromptInput, UserInput},
+        session::SessionId,
+    },
     oai::tower::ResponsesServiceConfig,
     tools::{ClaudeWorkspaceFiles, claude_bash::ClaudeBash},
 };
@@ -283,7 +286,7 @@ pub(crate) struct TurnContext {
 
 impl TurnContext {
     /// Adds the `<agent_context>` block that informs subagent spawning. Claude sessions have no
-    /// subagents, so their prompts are left unchanged.
+    /// subagents, so their prompts only get the text flattening the Claude backend requires.
     pub(crate) fn prompt(&self, prompt: impl Into<Prompt>) -> Prompt {
         match self.model {
             AgentModel::OpenAi(model) => AgentContext {
@@ -291,9 +294,28 @@ impl TurnContext {
                 thinking: self.thinking,
             }
             .prompt(prompt),
-            AgentModel::Claude(_) => prompt.into(),
+            AgentModel::Claude(_) => flatten_text_content(prompt.into()),
         }
     }
+}
+
+/// The Claude backend accepts only plain-text instructions, but the TUI always submits content
+/// parts. Text-only content is joined; content with images is left for the backend to reject.
+fn flatten_text_content(mut prompt: Prompt) -> Prompt {
+    let PromptInput::Content(content) = &prompt.instruction else {
+        return prompt;
+    };
+    let text = content
+        .iter()
+        .map(|item| match item {
+            UserInput::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Option<String>>();
+    if let Some(text) = text {
+        prompt.instruction = PromptInput::Text(text);
+    }
+    prompt
 }
 
 enum Cancellation {
@@ -933,7 +955,7 @@ mod tests {
     use super::{
         AgentInstructions, ConfiguredAgent, MEMORY_INSTRUCTIONS, MEMORY_REVIEW_CHECKPOINT,
         SCRATCHPAD_INSTRUCTIONS, SESSION_REFERENCE_INSTRUCTIONS, SUBAGENT_INSTRUCTIONS,
-        SessionInstructions, TACT_INSTRUCTIONS, TOOL_ORCHESTRATION_INSTRUCTIONS,
+        SessionInstructions, TACT_INSTRUCTIONS, TOOL_ORCHESTRATION_INSTRUCTIONS, TurnContext,
         configured_memory_store, fresh_instructions, reconcile_tact_instructions,
         session_instructions,
     };
@@ -941,12 +963,13 @@ mod tests {
         app::{
             config::{Config, ConfigOverrides, SkillsConfig},
             error::{Error, RuntimeError},
-            model::AgentModel,
+            model::{AgentModel, ClaudeModel},
         },
         core::extensions::Skill,
     };
     use nanocodex::{
-        Model, Nanocodex, OpenAi,
+        Model, Nanocodex, OpenAi, Thinking,
+        agent::input::{Prompt, PromptInput, UserInput},
         oai::{
             ResponseError,
             tower::{ResponsesAttempt, ResponsesServiceConfig, ResponsesServiceResponse},
@@ -1057,6 +1080,43 @@ mod tests {
             self.called.notify_one();
             pending()
         }
+    }
+
+    #[test]
+    fn claude_turns_send_text_only_content_as_plain_text() {
+        let context = TurnContext {
+            model: AgentModel::Claude(ClaudeModel::Opus55),
+            thinking: Thinking::High,
+        };
+
+        let prompt = context.prompt(Prompt::content(vec![
+            UserInput::Text {
+                text: "list files".to_owned(),
+            },
+            UserInput::Text {
+                text: "\n\nrender images inline".to_owned(),
+            },
+        ]));
+
+        assert!(matches!(
+            prompt.instruction,
+            PromptInput::Text(text) if text == "list files\n\nrender images inline"
+        ));
+    }
+
+    #[test]
+    fn claude_turns_keep_image_content() {
+        let context = TurnContext {
+            model: AgentModel::Claude(ClaudeModel::Opus55),
+            thinking: Thinking::High,
+        };
+
+        let prompt = context.prompt(Prompt::content(vec![UserInput::Image {
+            image_url: "data:image/png;base64,a".to_owned(),
+            detail: None,
+        }]));
+
+        assert!(matches!(prompt.instruction, PromptInput::Content(_)));
     }
 
     #[test]
