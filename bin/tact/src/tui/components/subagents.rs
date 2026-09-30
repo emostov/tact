@@ -473,7 +473,7 @@ impl SubagentTree {
         let title = format!(
             "{} · {} ({}) · #{}",
             node.descriptor.role,
-            model::name(node.descriptor.model),
+            model::name(node.descriptor.model.into()),
             node.descriptor.thinking,
             node.descriptor.id
         );
@@ -483,7 +483,7 @@ impl SubagentTree {
             &TRANSCRIPT_KEYS
         };
         let layout = Floating::new(&title, area.width, area.height, keys)
-            .colors(theme.border(), theme.model(node.descriptor.model))
+            .colors(theme.border(), theme.model(node.descriptor.model.into()))
             .render(frame, area, theme);
         node.transcript.render(frame, layout.body, theme);
     }
@@ -718,11 +718,11 @@ impl SubagentTree {
                 Span::styled(
                     format!(
                         "{} ({})",
-                        model::name(node.descriptor.model),
+                        model::name(node.descriptor.model.into()),
                         node.descriptor.thinking
                     ),
                     Style::default()
-                        .fg(theme.model(node.descriptor.model))
+                        .fg(theme.model(node.descriptor.model.into()))
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),

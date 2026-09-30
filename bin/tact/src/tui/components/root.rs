@@ -29,6 +29,7 @@ use crate::{
     app::{
         config::{ReasoningEffort, ReasoningMode, TuiConfig},
         model,
+        model::AgentModel,
     },
     core::extensions::Skill,
     tui::{
@@ -40,7 +41,6 @@ use crate::{
     },
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
-use nanocodex::Model;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -191,7 +191,7 @@ pub(crate) enum RootEvent {
         reasoning_mode: ReasoningMode,
         preferred_reasoning_mode: ReasoningMode,
         fast_mode: bool,
-        model: Model,
+        model: AgentModel,
         skills: Arc<[Skill]>,
     },
     NotifyError(String),
@@ -235,7 +235,7 @@ pub(crate) enum RootEffect {
     OpenConfigEditor,
     OpenLink(String),
     ReloadConfig,
-    NewSession(Model),
+    NewSession(AgentModel),
     LoadSessions(SessionListKind),
     LoadRecentPrompts(Vec<RecentPromptDraft>),
     LoadMemories,
@@ -255,7 +255,7 @@ pub(crate) enum RootEffect {
         effort: ReasoningEffort,
         reasoning_mode: ReasoningMode,
     },
-    SetModel(Model),
+    SetModel(AgentModel),
     SetFastMode(bool),
     SetMaxSubagents(usize),
     SetTheme(ThemeMode),
@@ -472,7 +472,7 @@ impl RootNode {
             .update(ComposerEvent::SetFastMode(enabled));
     }
 
-    pub(crate) fn set_model(&mut self, model: Model) {
+    pub(crate) fn set_model(&mut self, model: AgentModel) {
         let _ = self
             .composer
             .component_mut()
@@ -3114,7 +3114,10 @@ mod tests {
         TranscriptEvent,
     };
     use crate::{
-        app::config::{ReasoningEffort, ReasoningMode, TuiConfig},
+        app::{
+            config::{ReasoningEffort, ReasoningMode, TuiConfig},
+            model::AgentModel,
+        },
         core::extensions::Skill,
         tui::{
             session::{RecentPrompt, SessionSummary},
@@ -6065,7 +6068,10 @@ mod tests {
 
         root.update(key(KeyCode::Left, KeyModifiers::NONE));
         let selected = root.update(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(selected.effects, [RootEffect::SetModel(Model::Luna)]);
+        assert_eq!(
+            selected.effects,
+            [RootEffect::SetModel(AgentModel::OpenAi(Model::Luna))]
+        );
 
         root.interactive = true;
         root.thread = super::ThreadState::Started;
@@ -6077,11 +6083,11 @@ mod tests {
     #[test]
     fn fork_inherits_the_model_and_cannot_change_it() {
         let mut root = RootNode::new(Path::new("/work"), ReasoningEffort::Medium);
-        root.set_model(Model::Luna);
+        root.set_model(AgentModel::OpenAi(Model::Luna));
 
         let mut fork = root.fork(Path::new("/work"), ReasoningEffort::Medium);
 
-        assert_eq!(fork.composer().model(), Model::Luna);
+        assert_eq!(fork.composer().model(), AgentModel::OpenAi(Model::Luna));
         let update = fork.update(key(KeyCode::Char('d'), KeyModifiers::CONTROL));
         assert!(update.effects.is_empty());
         assert!(fork.overlay.is_none());
@@ -6447,7 +6453,7 @@ mod tests {
     #[test]
     fn new_session_action_clears_the_completed_thread_after_runtime_replacement() {
         let mut root = RootNode::new(Path::new("/work"), ReasoningEffort::Medium);
-        root.set_model(Model::Luna);
+        root.set_model(AgentModel::OpenAi(Model::Luna));
         for character in "old prompt".chars() {
             root.update(key(KeyCode::Char(character), KeyModifiers::NONE));
         }
@@ -6462,7 +6468,10 @@ mod tests {
 
         let requested = root.update(key(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(requested.effects, [RootEffect::NewSession(Model::Luna)]);
+        assert_eq!(
+            requested.effects,
+            [RootEffect::NewSession(AgentModel::OpenAi(Model::Luna))]
+        );
         assert!(root.overlay.is_none());
         assert!(!root.interactive);
 

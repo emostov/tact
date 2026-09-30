@@ -6,7 +6,10 @@ use super::{
     root::{DraftReset, RestoredSessionProjection, RootEffect, RootEvent, RootNode},
 };
 use crate::{
-    app::config::{ReasoningEffort, ReasoningMode, TuiConfig},
+    app::{
+        config::{ReasoningEffort, ReasoningMode, TuiConfig},
+        model::AgentModel,
+    },
     core::extensions::Skill,
     tui::{
         pane::PaneId,
@@ -16,7 +19,6 @@ use crate::{
     },
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use nanocodex::Model;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -68,7 +70,7 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
         reasoning_mode: ReasoningMode,
         fast_mode: bool,
-        model: Model,
+        model: AgentModel,
         skills: Arc<[Skill]>,
     },
     HandoffCancelled(PaneId),
@@ -106,7 +108,7 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
         reasoning_mode: ReasoningMode,
         fast_mode: bool,
-        model: Model,
+        model: AgentModel,
         draft_reset: DraftReset,
         skills: Arc<[Skill]>,
     },
@@ -158,7 +160,7 @@ pub(crate) enum AppEvent {
         reasoning_mode: ReasoningMode,
         preferred_reasoning_mode: ReasoningMode,
         fast_mode: bool,
-        model: Model,
+        model: AgentModel,
         skills: Arc<[Skill]>,
     },
     NotifyError {
@@ -814,7 +816,10 @@ mod tests {
         RootNode, SPLIT_HINT,
     };
     use crate::{
-        app::config::{ReasoningEffort, ReasoningMode, TuiConfig},
+        app::{
+            config::{ReasoningEffort, ReasoningMode, TuiConfig},
+            model::AgentModel,
+        },
         tui::{
             pane::PaneId,
             theme::{ColorScheme, Theme, ThemeMode},
@@ -864,14 +869,14 @@ mod tests {
             effort: ReasoningEffort::Low,
             reasoning_mode: ReasoningMode::Standard,
             fast_mode: false,
-            model: Model::Luna,
+            model: AgentModel::OpenAi(Model::Luna),
             draft_reset: DraftReset::Preserve,
             skills: Arc::from([]),
         });
 
         let root = app.root(PaneId::Main).unwrap();
         assert_eq!(root.composer().draft(), "send with luna");
-        assert_eq!(root.composer().model(), Model::Luna);
+        assert_eq!(root.composer().model(), AgentModel::OpenAi(Model::Luna));
     }
 
     #[test]
@@ -884,7 +889,7 @@ mod tests {
             effort: ReasoningEffort::High,
             reasoning_mode: ReasoningMode::Standard,
             fast_mode: false,
-            model: Model::Astra,
+            model: AgentModel::OpenAi(Model::Astra),
             draft_reset: DraftReset::Preserve,
             skills: Arc::from([]),
         });
@@ -1052,7 +1057,7 @@ mod tests {
             effort: ReasoningEffort::High,
             reasoning_mode: ReasoningMode::Standard,
             fast_mode: false,
-            model: Model::Luna,
+            model: AgentModel::OpenAi(Model::Luna),
             skills: Arc::from([]),
         });
 
@@ -1062,7 +1067,7 @@ mod tests {
             root.composer().draft(),
             "Continue from the validated parser design."
         );
-        assert_eq!(root.composer().model(), Model::Luna);
+        assert_eq!(root.composer().model(), AgentModel::OpenAi(Model::Luna));
     }
 
     #[test]

@@ -26,6 +26,7 @@ use crate::{
         config::{Config, ReasoningEffort, ReasoningMode},
         error::{Result, RuntimeError},
         herdr, hook,
+        model::AgentModel,
     },
     core::{ConfiguredAgent, extensions::Skill, supported_reasoning_mode},
     tui::{
@@ -53,7 +54,6 @@ use crate::{
 };
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use futures_util::StreamExt;
-use nanocodex::Model;
 use std::{
     collections::{HashMap, HashSet},
     io::{self, IsTerminal},
@@ -77,9 +77,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub(crate) enum StartupMode {
-    NewSession(Model),
+    NewSession(AgentModel),
     ResumeSession(String),
-    ResumeSelector(Model),
+    ResumeSelector(AgentModel),
 }
 
 type EditorTask =
@@ -94,7 +94,7 @@ type NewSessionTask = JoinHandle<(
     ReasoningEffort,
     ReasoningMode,
     bool,
-    Model,
+    AgentModel,
     components::DraftReset,
     Result<ConfiguredAgent>,
 )>;
@@ -153,7 +153,7 @@ struct RestoredSession {
     configured: ConfiguredAgent,
     projection: RestoredSessionProjection,
     reasoning_mode: ReasoningMode,
-    model: Model,
+    model: AgentModel,
     next_sequence: u64,
 }
 
@@ -208,7 +208,7 @@ struct PaneSettings {
     effort: ReasoningEffort,
     reasoning_mode: ReasoningMode,
     fast_mode: bool,
-    model: Model,
+    model: AgentModel,
 }
 
 impl PaneSettings {
@@ -216,7 +216,7 @@ impl PaneSettings {
         effort: ReasoningEffort,
         reasoning_mode: ReasoningMode,
         fast_mode: bool,
-        model: Model,
+        model: AgentModel,
     ) -> Self {
         Self {
             effort,
@@ -273,7 +273,7 @@ struct PaneRuntime {
     current_effort: ReasoningEffort,
     reasoning_mode: ReasoningMode,
     current_fast_mode: bool,
-    current_model: Model,
+    current_model: AgentModel,
     active_shells: usize,
     generation: u64,
     subagent_control: Subagents,
@@ -2660,7 +2660,7 @@ fn start_handoff(context: &mut EffectContext<'_>, pane: PaneId) {
 async fn prepare_handoff(
     result: std::result::Result<String, AuxiliaryError>,
     config: Config,
-    model: Model,
+    model: AgentModel,
     cancellation: CancellationToken,
 ) -> std::result::Result<PreparedHandoff, AuxiliaryError> {
     let prompt = result?;
@@ -2881,6 +2881,7 @@ mod tests {
         app::{
             config::{Config, ConfigOverrides, ReasoningEffort, ReasoningMode},
             error::{Error, RuntimeError},
+            model::AgentModel,
         },
         core::configured_memory_store,
         tui::{
@@ -2901,11 +2902,11 @@ mod tests {
     #[test]
     fn astra_uses_standard_reasoning_without_changing_other_models() {
         assert_eq!(
-            supported_reasoning_mode(Model::Astra, ReasoningMode::Pro),
+            supported_reasoning_mode(AgentModel::OpenAi(Model::Astra), ReasoningMode::Pro),
             ReasoningMode::Standard
         );
         assert_eq!(
-            supported_reasoning_mode(Model::Sol, ReasoningMode::Pro),
+            supported_reasoning_mode(AgentModel::OpenAi(Model::Sol), ReasoningMode::Pro),
             ReasoningMode::Pro
         );
     }
@@ -3200,7 +3201,7 @@ mod tests {
                 ReasoningEffort::Low,
                 ReasoningMode::Standard,
                 false,
-                Model::Luna,
+                AgentModel::OpenAi(Model::Luna),
             ),
             Arc::from("instructions"),
             subagent_control.clone(),
@@ -3218,7 +3219,7 @@ mod tests {
                 ReasoningEffort::Low,
                 ReasoningMode::Standard,
                 false,
-                Model::Luna,
+                AgentModel::OpenAi(Model::Luna),
             ),
             Arc::from("instructions"),
             subagent_control.clone(),
@@ -3306,7 +3307,7 @@ mod tests {
                 ReasoningEffort::Medium,
                 ReasoningMode::Standard,
                 false,
-                Model::Sol,
+                AgentModel::OpenAi(Model::Sol),
             ),
             Arc::from("instructions"),
             subagent_control.clone(),
@@ -3333,7 +3334,7 @@ mod tests {
                 ReasoningEffort::Medium,
                 ReasoningMode::Standard,
                 false,
-                Model::Sol,
+                AgentModel::OpenAi(Model::Sol),
             ),
             Arc::from("instructions"),
             subagent_control,

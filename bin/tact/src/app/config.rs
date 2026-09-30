@@ -3,12 +3,12 @@
 use crate::{
     app::{
         error::{ConfigError, McpUrlError, RemoteMemoryConfigError, Result},
-        model,
+        model::{self, AgentModel},
     },
     tui::theme::{Theme, ThemeMode},
 };
 use clap::ValueEnum;
-use nanocodex::{Model, Thinking, oai::transport::ResponsesTransport};
+use nanocodex::{Thinking, claude::Effort, oai::transport::ResponsesTransport};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -107,6 +107,7 @@ pub(crate) struct Config {
     #[serde(skip)]
     codex_home: Option<PathBuf>,
     auth: AuthConfig,
+    anthropic: Option<AnthropicConfig>,
     agent: AgentConfig,
     mcp_servers: BTreeMap<String, McpServerConfig>,
     skills: SkillsConfig,
@@ -159,11 +160,20 @@ pub(crate) struct AuthConfig {
     file: PathBuf,
 }
 
+/// Effective Anthropic configuration. Its presence enables Claude models.
+///
+/// Credentials are never stored here; they are read from the environment when an agent starts.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AnthropicConfig {
+    #[serde(serialize_with = "serialize_optional_string")]
+    base_url: Option<String>,
+}
+
 /// Effective Nanocodex configuration.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AgentConfig {
     workspace: PathBuf,
-    model: Model,
+    model: AgentModel,
     thinking: ReasoningEffort,
     reasoning_mode: ReasoningMode,
     fast_mode: bool,
@@ -238,7 +248,7 @@ pub(crate) struct ConfigOverrides {
     pub(crate) auth_mode: Option<AuthMode>,
     pub(crate) auth_file: Option<PathBuf>,
     pub(crate) workspace: Option<PathBuf>,
-    pub(crate) model: Option<Model>,
+    pub(crate) model: Option<AgentModel>,
     pub(crate) thinking: Option<ReasoningEffort>,
     pub(crate) reasoning_mode: Option<ReasoningMode>,
     pub(crate) max_subagents: Option<usize>,
@@ -268,6 +278,7 @@ pub(crate) struct ConfigReload {
 #[serde(default, deny_unknown_fields)]
 struct ConfigFile {
     auth: AuthConfigFile,
+    anthropic: Option<AnthropicConfigFile>,
     agent: AgentConfigFile,
     mcp_servers: BTreeMap<String, McpServerConfigFile>,
     skills: SkillsConfigFile,
@@ -373,10 +384,16 @@ struct AuthConfigFile {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+struct AnthropicConfigFile {
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct AgentConfigFile {
     workspace: Option<PathBuf>,
     #[serde(default, deserialize_with = "model::deserialize_optional")]
-    model: Option<Model>,
+    model: Option<AgentModel>,
     thinking: Option<ReasoningEffort>,
     reasoning_mode: Option<ReasoningMode>,
     fast_mode: Option<bool>,
@@ -462,7 +479,10 @@ impl Config {
             .clone()
             .or_else(|| environment.home.as_ref().map(|home| home.join(".codex")));
 
-        let model = overrides.model.or(file.agent.model).unwrap_or(Model::Sol);
+        let model = overrides
+            .model
+            .or(file.agent.model)
+            .unwrap_or(model::DEFAULT_MODEL);
         let thinking = overrides
             .thinking
             .or(file.agent.thinking)
@@ -480,6 +500,9 @@ impl Config {
                 overrides.auth_mode.or(file.auth.mode).unwrap_or_default(),
                 auth_file,
             ),
+            anthropic: file.anthropic.map(|anthropic| AnthropicConfig {
+                base_url: optional_string(anthropic.base_url),
+            }),
             agent: AgentConfig {
                 workspace,
                 model,
@@ -566,6 +589,11 @@ impl Config {
 
     pub(crate) fn auth(&self) -> &AuthConfig {
         &self.auth
+    }
+
+    /// The Anthropic configuration, present only when the config file has an `[anthropic]` table.
+    pub(crate) fn anthropic(&self) -> Option<&AnthropicConfig> {
+        self.anthropic.as_ref()
     }
 
     pub(crate) fn codex_home(&self) -> Option<&Path> {
@@ -1035,12 +1063,18 @@ impl AuthConfig {
     }
 }
 
+impl AnthropicConfig {
+    pub(crate) fn base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
+    }
+}
+
 impl AgentConfig {
     pub(crate) fn workspace(&self) -> &Path {
         &self.workspace
     }
 
-    pub(crate) const fn model(&self) -> Model {
+    pub(crate) const fn model(&self) -> AgentModel {
         self.model
     }
 
@@ -1385,6 +1419,18 @@ impl From<ReasoningEffort> for Thinking {
     }
 }
 
+impl From<ReasoningEffort> for Effort {
+    fn from(effort: ReasoningEffort) -> Self {
+        match effort {
+            ReasoningEffort::Low => Self::Low,
+            ReasoningEffort::Medium => Self::Medium,
+            ReasoningEffort::High => Self::High,
+            ReasoningEffort::Xhigh => Self::Xhigh,
+            ReasoningEffort::Max => Self::Max,
+        }
+    }
+}
+
 impl Environment {
     fn read() -> Self {
         Self {
@@ -1547,7 +1593,10 @@ mod tests {
         McpServerConfig, ReasoningEffort, ReasoningMode, RemoteMemoryConfigFile,
         RemoteMemoryTokenFile, ThemeMode, Transport, validate_mcp_url,
     };
-    use crate::app::error::{ConfigError, Error, McpUrlError, RemoteMemoryConfigError};
+    use crate::app::{
+        error::{ConfigError, Error, McpUrlError, RemoteMemoryConfigError},
+        model::AgentModel,
+    };
     use nanocodex::Model;
     use ratatui::style::Color;
     use std::{
@@ -1645,7 +1694,7 @@ mod tests {
         assert_eq!(config.auth.mode, AuthMode::Auto);
         assert_eq!(config.auth.file, home.join(".codex/auth.json"));
         assert_eq!(config.agent.workspace, directory.path());
-        assert_eq!(config.agent.model, Model::Sol);
+        assert_eq!(config.agent.model, AgentModel::OpenAi(Model::Sol));
         assert_eq!(config.agent.thinking, ReasoningEffort::Low);
         assert_eq!(config.agent.reasoning_mode, ReasoningMode::Standard);
         assert!(!config.agent.fast_mode);
@@ -2641,7 +2690,7 @@ mod tests {
                 auth_mode: Some(AuthMode::ChatGpt),
                 auth_file: Some("cli-auth.json".into()),
                 workspace: Some("cli-workspace".into()),
-                model: Some(Model::Luna),
+                model: Some(AgentModel::OpenAi(Model::Luna)),
                 thinking: Some(ReasoningEffort::High),
                 web_search: Some(false),
                 ..ConfigOverrides::default()
@@ -2657,7 +2706,7 @@ mod tests {
             config.agent.workspace,
             directory.path().join("cli-workspace")
         );
-        assert_eq!(config.agent.model, Model::Luna);
+        assert_eq!(config.agent.model, AgentModel::OpenAi(Model::Luna));
         assert_eq!(config.agent.thinking, ReasoningEffort::High);
         assert!(!config.agent.web_search);
     }
@@ -2759,7 +2808,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.agent.workspace, directory.path().join("workspace"));
-        assert_eq!(config.agent.model, Model::Astra);
+        assert_eq!(config.agent.model, AgentModel::OpenAi(Model::Astra));
         assert_eq!(config.agent.thinking, ReasoningEffort::Xhigh);
         assert_eq!(config.agent.reasoning_mode, ReasoningMode::Pro);
         assert!(config.agent.fast_mode);

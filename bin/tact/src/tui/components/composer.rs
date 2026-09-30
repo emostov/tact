@@ -9,7 +9,10 @@ use super::{
     waved_text::WavedText,
 };
 use crate::{
-    app::config::{ReasoningEffort, ReasoningMode},
+    app::{
+        config::{ReasoningEffort, ReasoningMode},
+        model::AgentModel,
+    },
     tui::{
         context::MODEL_WINDOW_TOKENS,
         format::{
@@ -23,7 +26,6 @@ use crate::{
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use history::PromptHistory;
 use layout::{VisualLayout, byte_at_column, grapheme_at_column};
-use nanocodex::Model;
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -69,7 +71,7 @@ pub(crate) enum ComposerEvent {
     },
     ReplaceDraft(String),
     SetEffort(ReasoningEffort),
-    SetModel(Model),
+    SetModel(AgentModel),
     SetReasoningMode(ReasoningMode),
     SetFastMode(bool),
     InputMode(Option<String>),
@@ -107,7 +109,7 @@ pub(crate) struct Composer {
     context_tokens: u64,
     workspace: String,
     thinking: ReasoningEffort,
-    model: Model,
+    model: AgentModel,
     reasoning_mode: ReasoningMode,
     fast_mode: bool,
     input_mode: Option<String>,
@@ -206,7 +208,7 @@ impl Composer {
             context_tokens: 0,
             workspace: shorten_home(workspace),
             thinking,
-            model: Model::Sol,
+            model: crate::app::model::DEFAULT_MODEL,
             reasoning_mode: ReasoningMode::Standard,
             fast_mode: false,
             input_mode: None,
@@ -578,7 +580,7 @@ impl Composer {
         self.thinking
     }
 
-    pub(crate) const fn model(&self) -> Model {
+    pub(crate) const fn model(&self) -> AgentModel {
         self.model
     }
 
@@ -1694,7 +1696,7 @@ mod tests {
             (Model::Astra, Color::LightMagenta),
         ] {
             let mut composer = Composer::new(Path::new("/work"), ReasoningEffort::Medium);
-            composer.update(ComposerEvent::SetModel(model));
+            composer.update(ComposerEvent::SetModel(model.into()));
             let terminal = render(&mut composer, 60, 5);
             let label = model.to_string().chars().collect::<Vec<_>>();
             let line = rows(&terminal)[0].chars().collect::<Vec<_>>();

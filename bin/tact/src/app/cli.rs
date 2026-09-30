@@ -4,14 +4,15 @@ use crate::{
     app::{
         config::{AuthMode, Config, ConfigOverrides, ReasoningEffort, ReasoningMode, Transport},
         error::{AuthResult, Error, Result, RuntimeError},
-        model, shutdown, update,
+        model,
+        model::AgentModel,
+        shutdown, update,
     },
     core::ConfiguredAgent,
     tui,
 };
 use clap::{ArgAction, Parser, Subcommand, builder::NonEmptyStringValueParser};
 use crossterm::style::{Color, Stylize};
-use nanocodex::Model;
 use std::{env, env::VarError, fmt, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -95,7 +96,7 @@ pub(crate) struct Cli {
         value_name = "MODEL",
         value_parser = model::parse
     )]
-    model: Option<Model>,
+    model: Option<AgentModel>,
 
     /// Maximum number of sub-agents that may run concurrently.
     #[arg(long, global = true, env = "TACT_MAX_SUBAGENTS", value_name = "COUNT")]
@@ -470,7 +471,7 @@ impl Command {
         Ok(())
     }
 
-    async fn run_with_config(self, config: &Config, model: Model) -> Result<()> {
+    async fn run_with_config(self, config: &Config, model: AgentModel) -> Result<()> {
         match self {
             Self::Auth { command } => command.run(config).await.map_err(Into::into),
             Self::Config { command } => command.run(config),
@@ -497,7 +498,7 @@ impl Command {
 
     async fn run_agent(
         config: &Config,
-        model: Model,
+        model: AgentModel,
         prompt: String,
         #[cfg(feature = "harbor-evals")] orchestration_log: Option<PathBuf>,
     ) -> Result<()> {
@@ -757,6 +758,7 @@ mod tests {
         cli::Command,
         config::{AuthMode, Config, ConfigOverrides},
         error::{ConfigError, Error},
+        model::AgentModel,
     };
     use clap::{CommandFactory, Parser, error::ErrorKind};
     use nanocodex::Model;
@@ -839,7 +841,7 @@ mod tests {
     fn model_selects_the_initial_agent() {
         let cli = Cli::try_parse_from(["tact", "--model", "gpt-6.1-sol"]).unwrap();
 
-        assert_eq!(cli.model, Some(Model::Sol));
+        assert_eq!(cli.model, Some(AgentModel::OpenAi(Model::Sol)));
     }
 
     #[test]
@@ -896,7 +898,7 @@ mod tests {
         assert_eq!(cli.config.unwrap(), PathBuf::from("tact.toml"));
         assert_eq!(cli.auth, Some(AuthMode::ChatGpt));
         assert_eq!(cli.auth_file.unwrap(), PathBuf::from("auth.json"));
-        assert_eq!(cli.model, Some(Model::Luna));
+        assert_eq!(cli.model, Some(AgentModel::OpenAi(Model::Luna)));
         assert_eq!(cli.max_subagents, Some(12));
         assert!(matches!(cli.command, Some(Command::Config { .. })));
     }

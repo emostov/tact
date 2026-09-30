@@ -5,11 +5,10 @@ use super::{
     node::{Component, ComponentUpdate, RenderRequest},
 };
 use crate::{
-    app::model::{SUPPORTED_MODELS, name},
+    app::model::{AgentModel, SUPPORTED_MODELS, name},
     tui::theme::Theme,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
-use nanocodex::Model;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -30,7 +29,7 @@ pub(super) enum ModelSelectorEvent {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ModelSelectorEffect {
-    Apply(Model),
+    Apply(AgentModel),
     Dismiss,
 }
 
@@ -48,7 +47,7 @@ struct Animation {
 }
 
 impl ModelSelector {
-    pub(super) fn new(initial: Model) -> Self {
+    pub(super) fn new(initial: AgentModel) -> Self {
         let selected = model_index(initial);
         Self {
             selected,
@@ -240,7 +239,7 @@ impl Component for ModelSelector {
     }
 }
 
-fn model_index(model: Model) -> usize {
+fn model_index(model: AgentModel) -> usize {
     SUPPORTED_MODELS
         .iter()
         .position(|candidate| *candidate == model)
@@ -250,7 +249,9 @@ fn model_index(model: Model) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::model::{AgentModel, ClaudeModel};
     use crossterm::event::{KeyEvent, KeyModifiers};
+    use nanocodex::Model;
     use ratatui::{Terminal, backend::TestBackend, style::Color};
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -296,7 +297,7 @@ mod tests {
 
     #[test]
     fn sol_label_is_centered_under_its_stop() {
-        let terminal = render(&mut ModelSelector::new(Model::Sol));
+        let terminal = render(&mut ModelSelector::new(AgentModel::OpenAi(Model::Sol)));
         let buffer = terminal.backend().buffer();
         let stop = buffer
             .content
@@ -316,7 +317,7 @@ mod tests {
     #[test]
     fn selection_moves_linearly_and_does_not_wrap() {
         let now = Instant::now();
-        let mut selector = ModelSelector::new(Model::Sol);
+        let mut selector = ModelSelector::new(AgentModel::OpenAi(Model::Sol));
 
         selector.update_key(key(KeyCode::Right), now);
         assert_eq!(selector.selected, 2);
@@ -330,7 +331,7 @@ mod tests {
 
     #[test]
     fn every_supported_model_has_a_colored_stop() {
-        let mut selector = ModelSelector::new(Model::Sol);
+        let mut selector = ModelSelector::new(AgentModel::OpenAi(Model::Sol));
 
         assert_eq!(rendered_label_color(&mut selector, "Luna"), Color::White);
         assert_eq!(rendered_label_color(&mut selector, "Sol"), Color::Yellow);
@@ -338,11 +339,12 @@ mod tests {
             rendered_label_color(&mut selector, "Astra"),
             Color::LightMagenta
         );
+        assert_eq!(rendered_label_color(&mut selector, "Opus"), Color::LightRed);
     }
 
     #[test]
     fn filled_bar_uses_the_selected_model_color() {
-        let mut selector = ModelSelector::new(Model::Astra);
+        let mut selector = ModelSelector::new(AgentModel::Claude(ClaudeModel::Opus55));
         let terminal = render(&mut selector);
         let rail = terminal
             .backend()
@@ -353,28 +355,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!rail.is_empty());
-        assert!(rail.iter().all(|cell| cell.fg == Color::LightMagenta));
+        assert!(rail.iter().all(|cell| cell.fg == Color::LightRed));
     }
 
     #[test]
     fn stops_use_the_filled_bar_color_only_when_covered() {
         assert_eq!(
-            rendered_stop_colors(&mut ModelSelector::new(Model::Luna)),
-            [Color::DarkGray, Color::DarkGray]
+            rendered_stop_colors(&mut ModelSelector::new(AgentModel::OpenAi(Model::Luna))),
+            [Color::DarkGray, Color::DarkGray, Color::DarkGray]
         );
         assert_eq!(
-            rendered_stop_colors(&mut ModelSelector::new(Model::Sol)),
-            [Color::Yellow, Color::DarkGray]
+            rendered_stop_colors(&mut ModelSelector::new(AgentModel::OpenAi(Model::Sol))),
+            [Color::Yellow, Color::DarkGray, Color::DarkGray]
         );
         assert_eq!(
-            rendered_stop_colors(&mut ModelSelector::new(Model::Astra)),
-            [Color::LightMagenta, Color::LightMagenta]
+            rendered_stop_colors(&mut ModelSelector::new(AgentModel::OpenAi(Model::Astra))),
+            [Color::LightMagenta, Color::LightMagenta, Color::DarkGray]
+        );
+        assert_eq!(
+            rendered_stop_colors(&mut ModelSelector::new(AgentModel::Claude(
+                ClaudeModel::Opus55
+            ))),
+            [Color::LightRed, Color::LightRed, Color::LightRed]
         );
     }
 
     #[test]
     fn title_does_not_describe_the_model_order() {
-        let terminal = render(&mut ModelSelector::new(Model::Sol));
+        let terminal = render(&mut ModelSelector::new(AgentModel::OpenAi(Model::Sol)));
         let rendered = terminal
             .backend()
             .buffer()
@@ -391,7 +399,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 7)).unwrap();
         terminal
             .draw(|frame| {
-                ModelSelector::new(Model::Sol).render(frame, frame.area(), &Theme::default());
+                ModelSelector::new(AgentModel::OpenAi(Model::Sol)).render(
+                    frame,
+                    frame.area(),
+                    &Theme::default(),
+                );
             })
             .unwrap();
 
@@ -414,29 +426,35 @@ mod tests {
     #[test]
     fn applying_returns_the_selected_model() {
         let now = Instant::now();
-        let mut selector = ModelSelector::new(Model::Sol);
+        let mut selector = ModelSelector::new(AgentModel::OpenAi(Model::Sol));
         selector.update_key(key(KeyCode::Left), now);
 
         let update = selector.update_key(key(KeyCode::Enter), now);
 
-        assert_eq!(update.effects, [ModelSelectorEffect::Apply(Model::Luna)]);
+        assert_eq!(
+            update.effects,
+            [ModelSelectorEffect::Apply(AgentModel::OpenAi(Model::Luna))]
+        );
     }
 
     #[test]
     fn astra_initialization_and_apply_preserve_astra() {
         let now = Instant::now();
-        let mut selector = ModelSelector::new(Model::Astra);
+        let mut selector = ModelSelector::new(AgentModel::OpenAi(Model::Astra));
 
         assert_eq!(selector.selected, 2);
         let update = selector.update_key(key(KeyCode::Enter), now);
 
-        assert_eq!(update.effects, [ModelSelectorEffect::Apply(Model::Astra)]);
+        assert_eq!(
+            update.effects,
+            [ModelSelectorEffect::Apply(AgentModel::OpenAi(Model::Astra))]
+        );
     }
 
     #[test]
     fn animation_reaches_the_selected_stop() {
         let now = Instant::now();
-        let mut selector = ModelSelector::new(Model::Luna);
+        let mut selector = ModelSelector::new(AgentModel::OpenAi(Model::Luna));
         selector.update_key(key(KeyCode::Right), now);
         assert!(selector.animation_deadline().is_some());
 

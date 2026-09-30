@@ -9,16 +9,19 @@ use crate::{
         config::{Config, ReasoningEffort, ReasoningMode, SkillsConfig},
         error::{ConfigError, Result, RuntimeError},
         hook,
+        model::{AgentModel, ClaudeModel},
     },
     core::extensions::{
-        CurrentSessionTool, Skill, SkillCatalog, mcp_provider,
+        CurrentSessionTool, Skill, SkillCatalog, WorkspaceBash, mcp_provider,
         sessions::{FindSessionsTool, ReadSessionTool},
     },
     tui::session::ResumeState,
 };
 use nanocodex::{
-    AgentEvents, Model, Nanocodex, NanocodexError, OpenAi, Tools, TurnControl,
-    agent::session::SessionId, oai::tower::ResponsesServiceConfig,
+    AgentEvents, Claude, Model, Nanocodex, NanocodexError, OpenAi, Thinking, Tools, TurnControl,
+    agent::{input::Prompt, session::SessionId},
+    oai::tower::ResponsesServiceConfig,
+    tools::{ClaudeWorkspaceFiles, claude_bash::ClaudeBash},
 };
 #[cfg(feature = "harbor-evals")]
 use orchestration::{OrchestrationRecorder, RunOutcome};
@@ -39,6 +42,26 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const RESPONSE_MAX_ATTEMPTS: NonZeroU32 = NonZeroU32::new(2_000).unwrap();
+
+/// Messages output-token limit for Claude, including adaptive thinking.
+const CLAUDE_MAX_OUTPUT_TOKENS: u32 = 64_000;
+
+const CLAUDE_BASE_INSTRUCTIONS: &str = concat!(
+    "You are Tact, an interactive coding agent running in the user's terminal. You help with ",
+    "software engineering tasks in the user's workspace: reading and explaining code, fixing bugs, ",
+    "implementing features, and running commands.\n\n",
+    "Use Read, Glob, and Grep to inspect files, Edit and Write to change them, and Bash for ",
+    "builds, tests, git, and other commands. Paths are relative to the workspace unless absolute. ",
+    "Read a file before editing it. Prefer small, focused edits that match the surrounding code. ",
+    "Verify changes by running the relevant checks when practical, and report failures honestly.\n\n",
+    "Keep responses concise and use Markdown. Reference code as `path:line`. Ask before ",
+    "destructive or irreversible actions such as deleting data or force-pushing."
+);
+
+/// Project instruction files loaded into Claude sessions, in precedence order.
+///
+/// The OpenAI backend discovers `AGENTS.md` itself; the Claude backend does not.
+const CLAUDE_PROJECT_INSTRUCTION_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 
 const SUBAGENT_INSTRUCTIONS: &str = concat!(
     "For larger tasks, delegate meaningful, separable work to subagents; handle trivial or tightly ",
@@ -190,7 +213,7 @@ pub(crate) const MEMORY_REVIEW_CHECKPOINT: &str = concat!(
 
 pub(crate) struct ConfiguredAgent {
     pub(crate) agent: Nanocodex,
-    pub(crate) context: AgentContext,
+    pub(crate) context: TurnContext,
     pub(crate) events: AgentEvents,
     pub(crate) instructions: Arc<str>,
     pub(crate) skills: Arc<[Skill]>,
@@ -251,13 +274,38 @@ impl SessionInstructions {
     }
 }
 
+/// The model and reasoning effort for a root turn.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TurnContext {
+    pub(crate) model: AgentModel,
+    pub(crate) thinking: Thinking,
+}
+
+impl TurnContext {
+    /// Adds the `<agent_context>` block that informs subagent spawning. Claude sessions have no
+    /// subagents, so their prompts are left unchanged.
+    pub(crate) fn prompt(&self, prompt: impl Into<Prompt>) -> Prompt {
+        match self.model {
+            AgentModel::OpenAi(model) => AgentContext {
+                model,
+                thinking: self.thinking,
+            }
+            .prompt(prompt),
+            AgentModel::Claude(_) => prompt.into(),
+        }
+    }
+}
+
 enum Cancellation {
     NotRequested,
     Requested,
     Failed(NanocodexError),
 }
 
-pub(crate) fn supported_reasoning_mode(model: Model, preferred: ReasoningMode) -> ReasoningMode {
+pub(crate) fn supported_reasoning_mode(
+    model: AgentModel,
+    preferred: ReasoningMode,
+) -> ReasoningMode {
     if model.supports_reasoning_mode(preferred.into()) {
         preferred
     } else {
@@ -268,7 +316,7 @@ pub(crate) fn supported_reasoning_mode(model: Model, preferred: ReasoningMode) -
 impl ConfiguredAgent {
     pub(crate) async fn run_from_config(
         config: &Config,
-        model: Model,
+        model: AgentModel,
         prompt: String,
         shutdown: CancellationToken,
         #[cfg(feature = "harbor-evals")] orchestration_log: Option<PathBuf>,
@@ -294,7 +342,7 @@ impl ConfiguredAgent {
         config: &Config,
         thinking: ReasoningEffort,
         reasoning_mode: ReasoningMode,
-        model: Model,
+        model: AgentModel,
     ) -> Result<Self> {
         Self::from_config_with_session_and_model(
             config,
@@ -310,7 +358,7 @@ impl ConfiguredAgent {
         config: &Config,
         thinking: ReasoningEffort,
         reasoning_mode: ReasoningMode,
-        model: Model,
+        model: AgentModel,
         session_id: Option<&str>,
         resume: Option<ResumeState>,
     ) -> Result<Self> {
@@ -328,10 +376,16 @@ impl ConfiguredAgent {
         config: &Config,
         thinking: ReasoningEffort,
         reasoning_mode: ReasoningMode,
-        model: Model,
+        model: AgentModel,
         session_id: Option<&str>,
         resume: Option<ResumeState>,
     ) -> Result<Self> {
+        let model = match model {
+            AgentModel::OpenAi(model) => model,
+            AgentModel::Claude(model) => {
+                return Self::from_claude_config(config, thinking, model, session_id, resume);
+            }
+        };
         let agent_config = config.agent();
         let workspace = Self::resolve_workspace(agent_config.workspace())?;
         let mcp = mcp_provider(config)?;
@@ -432,14 +486,66 @@ impl ConfiguredAgent {
         let (agent, events) = builder.build()?;
         Ok(Self {
             agent,
-            context: AgentContext {
-                model,
+            context: TurnContext {
+                model: model.into(),
                 thinking: thinking.into(),
             },
             events,
             instructions,
             skills,
             memory_enabled,
+            subagent_updates,
+            subagent_control,
+        })
+    }
+
+    /// Builds a Claude agent on the Messages backend.
+    ///
+    /// Claude sessions have file and shell tools only: no subagents, memory, MCP, session tools,
+    /// or resume.
+    fn from_claude_config(
+        config: &Config,
+        thinking: ReasoningEffort,
+        model: ClaudeModel,
+        session_id: Option<&str>,
+        resume: Option<ResumeState>,
+    ) -> Result<Self> {
+        let anthropic = config
+            .anthropic()
+            .ok_or(RuntimeError::AnthropicUnconfigured)?;
+        if session_id.is_some() || resume.is_some() {
+            return Err(RuntimeError::ClaudeResumeUnsupported.into());
+        }
+        let agent_config = config.agent();
+        let workspace = Self::resolve_workspace(agent_config.workspace())?;
+        let client = anthropic.client()?;
+        let SessionInstructions {
+            text: instructions,
+            skills,
+        } = claude_instructions(config, &workspace);
+        let files = ClaudeWorkspaceFiles::new(&workspace).map_err(RuntimeError::ClaudeWorkspace)?;
+
+        let (agent, events) = Nanocodex::builder(Claude::new(client, model.as_str()))
+            .system(instructions.as_ref())
+            .workspace(workspace.display().to_string())
+            .effort(thinking.into())
+            .adaptive_thinking()
+            .max_tokens(CLAUDE_MAX_OUTPUT_TOKENS)
+            .automatic_cache(true)
+            .workspace_files(Arc::new(files))
+            .sandbox_bash(Arc::new(ClaudeBash::new(WorkspaceBash::new(workspace))))
+            .build()?;
+        let (subagent_control, subagent_updates) = Subagents::new(agent_config.max_subagents());
+        Ok(Self {
+            agent,
+            context: TurnContext {
+                model: AgentModel::Claude(model),
+                thinking: thinking.into(),
+            },
+            events,
+            instructions,
+            skills,
+            memory_enabled: false,
             subagent_updates,
             subagent_control,
         })
@@ -712,6 +818,44 @@ fn fresh_instructions_with_catalog(
         })
 }
 
+/// Claude system instructions: Tact's base prompt, workspace project instructions, and skills.
+fn claude_instructions(config: &Config, workspace: &Path) -> SessionInstructions {
+    let agent = config.agent();
+    let mut instructions = agent
+        .instructions()
+        .unwrap_or(CLAUDE_BASE_INSTRUCTIONS)
+        .to_owned();
+    instructions.push_str("\n\n");
+    instructions.push_str(TACT_INSTRUCTIONS);
+    instructions.push_str(&format!("\n\nThe workspace is `{}`.", workspace.display()));
+    for name in CLAUDE_PROJECT_INSTRUCTION_FILES {
+        let Ok(project) = std::fs::read_to_string(workspace.join(name)) else {
+            continue;
+        };
+        instructions.push_str(&format!(
+            "\n\n<project_instructions source=\"{name}\">\n{}\n</project_instructions>",
+            project.trim()
+        ));
+    }
+    if let Some(appended) = agent.append_instructions() {
+        instructions.push_str("\n\n");
+        instructions.push_str(appended);
+    }
+    let catalog = SkillCatalog::load(config.skills());
+    let skills = catalog
+        .rendered_instructions()
+        .map(|rendered| {
+            instructions.push_str("\n\n");
+            instructions.push_str(rendered);
+            SkillCatalog::available_in(&instructions).into()
+        })
+        .unwrap_or_else(|| Arc::from([]));
+    SessionInstructions {
+        text: Arc::from(instructions),
+        skills,
+    }
+}
+
 fn reconcile_tact_instructions(mut instructions: String) -> String {
     if let Some(rest) = instructions
         .strip_prefix("You are Codex")
@@ -797,6 +941,7 @@ mod tests {
         app::{
             config::{Config, ConfigOverrides, SkillsConfig},
             error::{Error, RuntimeError},
+            model::AgentModel,
         },
         core::extensions::Skill,
     };
@@ -972,7 +1117,7 @@ mod tests {
             let config = Config::load(ConfigOverrides {
                 path: Some(config_path.clone()),
                 workspace: Some(directory.path().to_path_buf()),
-                model: Some(Model::Astra),
+                model: Some(AgentModel::OpenAi(Model::Astra)),
                 instructions: custom.map(str::to_owned),
                 append_instructions: Some("Project instructions.".to_owned()),
                 ..ConfigOverrides::default()
@@ -1021,7 +1166,7 @@ mod tests {
             let config = Config::load(ConfigOverrides {
                 path: Some(path.clone()),
                 workspace: Some(directory.path().to_path_buf()),
-                model: Some(Model::Astra),
+                model: Some(AgentModel::OpenAi(Model::Astra)),
                 instructions: custom.map(str::to_owned),
                 append_instructions: Some("Current project instructions.".to_owned()),
                 ..ConfigOverrides::default()
@@ -1442,8 +1587,8 @@ mod tests {
         let (subagent_control, subagent_updates) = tact_subagents::Subagents::new(32);
         let configured = ConfiguredAgent {
             agent,
-            context: tact_subagents::AgentContext {
-                model: Model::Astra,
+            context: super::TurnContext {
+                model: AgentModel::OpenAi(Model::Astra),
                 thinking: nanocodex::Thinking::Low,
             },
             events,

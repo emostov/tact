@@ -1,9 +1,11 @@
 use crate::{
-    app::config::{ReasoningEffort, ReasoningMode},
+    app::{
+        config::{ReasoningEffort, ReasoningMode},
+        model::AgentModel,
+    },
     core::ConfiguredAgent,
     tui::{pane::PaneId, worker::AuxiliaryError},
 };
-use nanocodex::Model;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -27,7 +29,7 @@ pub(crate) struct PreparedHandoff {
     pub(crate) effort: ReasoningEffort,
     pub(crate) reasoning_mode: ReasoningMode,
     pub(crate) fast_mode: bool,
-    pub(crate) model: Model,
+    pub(crate) model: AgentModel,
     pub(crate) configured: ConfiguredAgent,
 }
 

@@ -1,17 +1,33 @@
 //! Authentication selection and shared ChatGPT credential management.
 
 use crate::app::{
-    config::{AuthConfig, AuthMode},
+    config::{AnthropicConfig, AuthConfig, AuthMode},
     error::{AuthError, AuthResult, SecretError},
     secret::SecretString,
 };
-use nanocodex::oai::auth::{
-    ChatGptAuthStatus, ChatGptLogin, OpenAiAuth, load_chatgpt_auth, logout_chatgpt,
-    resolve_chatgpt_auth_status,
+use nanocodex::{
+    claude::ClaudeClient,
+    oai::auth::{
+        ChatGptAuthStatus, ChatGptLogin, OpenAiAuth, load_chatgpt_auth, logout_chatgpt,
+        resolve_chatgpt_auth_status,
+    },
 };
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::{path::Path, result::Result as StdResult};
 
 const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
+const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
+const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+
+/// Anthropic credentials, using the same environment variables as Claude Code.
+enum AnthropicCredential {
+    /// `ANTHROPIC_AUTH_TOKEN`, sent as a bearer token. Proxies such as Valet use this.
+    AuthToken(SecretString),
+    /// `ANTHROPIC_API_KEY`, sent as `x-api-key`.
+    ApiKey(SecretString),
+}
 
 enum SelectedAuth {
     ChatGpt,
@@ -129,6 +145,62 @@ impl AuthConfig {
     }
 }
 
+impl AnthropicConfig {
+    /// Builds a Messages client from `[anthropic]` settings and the Anthropic environment.
+    ///
+    /// The base URL comes from `base_url`, then `ANTHROPIC_BASE_URL`, then Anthropic's API.
+    pub(crate) fn client(&self) -> AuthResult<ClaudeClient> {
+        let base_url = match self.base_url() {
+            Some(base_url) => base_url.to_owned(),
+            None => std::env::var(ANTHROPIC_BASE_URL)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_ANTHROPIC_BASE_URL.to_owned()),
+        };
+        let credential = AnthropicCredential::from_environment(
+            || SecretString::from_environment(ANTHROPIC_AUTH_TOKEN),
+            || SecretString::from_environment(ANTHROPIC_API_KEY),
+        )?;
+        credential.into_client(reqwest::Client::new(), messages_endpoint(&base_url))
+    }
+}
+
+fn messages_endpoint(base_url: &str) -> String {
+    format!("{}/v1/messages", base_url.trim_end_matches('/'))
+}
+
+impl AnthropicCredential {
+    fn from_environment<T, K>(read_auth_token: T, read_api_key: K) -> AuthResult<Self>
+    where
+        T: FnOnce() -> StdResult<Option<SecretString>, SecretError>,
+        K: FnOnce() -> StdResult<Option<SecretString>, SecretError>,
+    {
+        if let Some(token) = read_auth_token()? {
+            return Ok(Self::AuthToken(token));
+        }
+        read_api_key()?
+            .map(Self::ApiKey)
+            .ok_or(AuthError::AnthropicCredentialsUnavailable)
+    }
+
+    // Nanocodex and reqwest retain non-zeroizing copies of the credential after this boundary.
+    // The application-owned buffer is still zeroized when the secret is dropped.
+    fn into_client(self, http: reqwest::Client, endpoint: String) -> AuthResult<ClaudeClient> {
+        match self {
+            Self::AuthToken(token) => {
+                let mut authorization =
+                    HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
+                        .map_err(|_| AuthError::InvalidAnthropicAuthToken)?;
+                authorization.set_sensitive(true);
+                let mut headers = HeaderMap::new();
+                headers.insert(AUTHORIZATION, authorization);
+                Ok(ClaudeClient::with_auth_headers(http, endpoint, headers))
+            }
+            Self::ApiKey(api_key) => Ok(ClaudeClient::new(http, endpoint, api_key.expose_secret())),
+        }
+    }
+}
+
 impl SelectedAuth {
     fn into_openai_auth(self, auth_file: &Path) -> AuthResult<OpenAiAuth> {
         match self {
@@ -144,7 +216,7 @@ impl SelectedAuth {
 
 #[cfg(test)]
 mod tests {
-    use super::SelectedAuth;
+    use super::{AnthropicCredential, SelectedAuth, messages_endpoint};
     use crate::app::{
         config::{AuthConfig, AuthMode},
         error::AuthError,
@@ -213,6 +285,55 @@ mod tests {
         let auth = selected.into_openai_auth("unused.json".as_ref()).unwrap();
 
         assert_eq!(auth.mode(), OpenAiAuthMode::ApiKey);
+    }
+
+    #[test]
+    fn anthropic_auth_token_takes_precedence_over_an_api_key() {
+        let api_key_read = Cell::new(false);
+        let credential = AnthropicCredential::from_environment(
+            || Ok(Some(SecretString::new("token".into()))),
+            || {
+                api_key_read.set(true);
+                Ok(Some(SecretString::new("api-key".into())))
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(credential, AnthropicCredential::AuthToken(_)));
+        assert!(!api_key_read.get());
+    }
+
+    #[test]
+    fn anthropic_api_key_is_used_without_an_auth_token() {
+        let credential = AnthropicCredential::from_environment(
+            || Ok(None),
+            || Ok(Some(SecretString::new("api-key".into()))),
+        )
+        .unwrap();
+
+        assert!(matches!(credential, AnthropicCredential::ApiKey(_)));
+    }
+
+    #[test]
+    fn missing_anthropic_credentials_are_reported() {
+        let result = AnthropicCredential::from_environment(|| Ok(None), || Ok(None));
+
+        assert!(matches!(
+            result,
+            Err(AuthError::AnthropicCredentialsUnavailable)
+        ));
+    }
+
+    #[test]
+    fn messages_endpoint_joins_proxy_base_urls() {
+        assert_eq!(
+            messages_endpoint("https://proxy.example/proxy/anthropic/"),
+            "https://proxy.example/proxy/anthropic/v1/messages"
+        );
+        assert_eq!(
+            messages_endpoint("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 
     #[test]

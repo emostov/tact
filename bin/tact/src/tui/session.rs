@@ -4,13 +4,14 @@ use crate::{
     app::{
         config::{ReasoningEffort, ReasoningMode},
         model,
+        model::AgentModel,
     },
     tui::{
         storage::{SessionStorage, StorageError},
         transcript::{SessionStarted, TerminalStopReason, TranscriptRecord},
     },
 };
-use nanocodex::{Model, agent::session::SessionSnapshot};
+use nanocodex::agent::session::SessionSnapshot;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -336,13 +337,16 @@ pub(crate) fn reasoning_mode(records: &[Arc<TranscriptRecord>]) -> ReasoningMode
         .map_or(ReasoningMode::Standard, |started| started.reasoning_mode)
 }
 
-pub(crate) fn model(records: &[Arc<TranscriptRecord>]) -> Result<Model, SessionError> {
+pub(crate) fn model(records: &[Arc<TranscriptRecord>]) -> Result<AgentModel, SessionError> {
     let stored = records
         .iter()
         .rev()
         .find(|record| record.source() == "tact" && record.kind() == "session.started")
         .and_then(|record| record.decode_payload::<SessionStarted>().ok())
-        .map_or_else(|| Model::Sol.to_string(), |started| started.model);
+        .map_or_else(
+            || crate::app::model::DEFAULT_MODEL.to_string(),
+            |started| started.model,
+        );
     model::parse(&stored).map_err(|_| SessionError::UnsupportedModel { model: stored })
 }
 
@@ -394,7 +398,10 @@ mod tests {
         model, save_checkpoint,
     };
     use crate::{
-        app::config::{ReasoningEffort, ReasoningMode},
+        app::{
+            config::{ReasoningEffort, ReasoningMode},
+            model::AgentModel,
+        },
         tui::{
             storage::{SessionStorage, database_path},
             transcript::{LocalEvent, SessionStarted, TranscriptJournal, TranscriptRecord, TurnId},
@@ -497,8 +504,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(model(&[Arc::new(record)]).unwrap(), Model::Luna);
-        assert_eq!(model(&[]).unwrap(), Model::Sol);
+        assert_eq!(
+            model(&[Arc::new(record)]).unwrap(),
+            AgentModel::OpenAi(Model::Luna)
+        );
+        assert_eq!(model(&[]).unwrap(), AgentModel::OpenAi(Model::Sol));
     }
 
     #[test]

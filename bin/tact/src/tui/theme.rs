@@ -1,6 +1,6 @@
 //! Configurable terminal colors and light/dark mode selection.
 
-use crate::app::config::ReasoningEffort;
+use crate::app::{config::ReasoningEffort, model::AgentModel};
 use nanocodex::Model;
 use ratatui::style::Color;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -170,12 +170,13 @@ impl Theme {
         }
     }
 
-    pub(crate) const fn model(&self, model: Model) -> Color {
+    pub(crate) const fn model(&self, model: AgentModel) -> Color {
         match model {
-            Model::Luna => Color::White,
-            Model::Sol => Color::Yellow,
-            Model::Astra => Color::LightMagenta,
-            _ => Color::White,
+            AgentModel::OpenAi(Model::Luna) => Color::White,
+            AgentModel::OpenAi(Model::Sol) => Color::Yellow,
+            AgentModel::OpenAi(Model::Astra) => Color::LightMagenta,
+            AgentModel::OpenAi(_) => Color::White,
+            AgentModel::Claude(_) => Color::LightRed,
         }
     }
 
@@ -367,6 +368,7 @@ impl fmt::Display for ColorName {
 #[cfg(test)]
 mod tests {
     use super::{ColorScheme, SYSTEM_SCHEME_POLL_INTERVAL, Theme, ThemeMode};
+    use crate::app::model::AgentModel;
     use nanocodex::Model;
     use ratatui::style::Color;
 
@@ -390,9 +392,12 @@ mod tests {
     fn models_have_a_shared_semantic_palette() {
         let theme = Theme::default();
 
-        assert_eq!(theme.model(Model::Luna), Color::White);
-        assert_eq!(theme.model(Model::Sol), Color::Yellow);
-        assert_eq!(theme.model(Model::Astra), Color::LightMagenta);
+        assert_eq!(theme.model(AgentModel::OpenAi(Model::Luna)), Color::White);
+        assert_eq!(theme.model(AgentModel::OpenAi(Model::Sol)), Color::Yellow);
+        assert_eq!(
+            theme.model(AgentModel::OpenAi(Model::Astra)),
+            Color::LightMagenta
+        );
     }
 
     #[test]

@@ -108,6 +108,12 @@ pub(crate) enum AuthError {
         "no ChatGPT credentials found at {path} and OPENAI_API_KEY is not set; run `tact auth login` or set OPENAI_API_KEY"
     )]
     CredentialsUnavailable { path: PathBuf },
+    #[error(
+        "neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set; set one to use Claude models"
+    )]
+    AnthropicCredentialsUnavailable,
+    #[error("ANTHROPIC_AUTH_TOKEN is not a valid HTTP header value")]
+    InvalidAnthropicAuthToken,
     #[error(transparent)]
     Secret(#[from] SecretError),
 }
@@ -224,6 +230,12 @@ pub(crate) enum RuntimeError {
     Terminal(#[source] io::Error),
     #[error("failed to configure remote memory: {0}")]
     RemoteMemory(#[source] RemoteClientError),
+    #[error("Claude models require an [anthropic] table in the Tact config")]
+    AnthropicUnconfigured,
+    #[error("Claude sessions cannot be resumed yet")]
+    ClaudeResumeUnsupported,
+    #[error("failed to open the workspace for Claude file tools: {0}")]
+    ClaudeWorkspace(String),
     #[error("the external-editor task stopped unexpectedly: {0}")]
     ExternalEditorTask(#[source] tokio::task::JoinError),
     #[error("the effort update task stopped unexpectedly: {0}")]

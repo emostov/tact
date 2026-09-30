@@ -2,7 +2,7 @@
 
 use crate::{
     app::config::ReasoningEffort,
-    core::{IMAGE_RENDERING_INSTRUCTIONS, MEMORY_REVIEW_CHECKPOINT},
+    core::{IMAGE_RENDERING_INSTRUCTIONS, MEMORY_REVIEW_CHECKPOINT, TurnContext},
     tui::{
         components::QueueId,
         pane::PaneId,
@@ -21,7 +21,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
-use tact_subagents::AgentContext;
 use tokio::{
     sync::{mpsc, oneshot},
     task::{JoinError, JoinSet},
@@ -57,7 +56,7 @@ pub(crate) enum WorkerCommand {
     ReplaceAgent {
         pane: PaneId,
         agent: Nanocodex,
-        context: AgentContext,
+        context: TurnContext,
         memory_review: MemoryReviewState,
     },
     SetThinking {
@@ -374,12 +373,12 @@ struct SteerRequest {
 
 struct PaneAgent {
     agent: Nanocodex,
-    context: AgentContext,
+    context: TurnContext,
 }
 
 pub(crate) fn spawn(
     agent: Nanocodex,
-    context: AgentContext,
+    context: TurnContext,
     memory_review: MemoryReviewState,
     shutdown: CancellationToken,
 ) -> (
@@ -401,7 +400,7 @@ pub(crate) fn spawn(
 
 async fn run(
     agent: Nanocodex,
-    context: AgentContext,
+    context: TurnContext,
     memory_review: MemoryReviewState,
     mut commands: mpsc::UnboundedReceiver<WorkerCommand>,
     updates: mpsc::UnboundedSender<WorkerEvent>,
@@ -1055,8 +1054,8 @@ mod tests {
         finish_turn, reflection_prompt, spawn,
     };
     use crate::{
-        app::config::ReasoningEffort,
-        core::{IMAGE_RENDERING_INSTRUCTIONS, MEMORY_REVIEW_CHECKPOINT},
+        app::{config::ReasoningEffort, model::AgentModel},
+        core::{IMAGE_RENDERING_INSTRUCTIONS, MEMORY_REVIEW_CHECKPOINT, TurnContext},
         tui::{
             components::QueueId,
             pane::PaneId,
@@ -1088,7 +1087,6 @@ mod tests {
         task::{Context, Poll},
         time::Duration,
     };
-    use tact_subagents::AgentContext;
     use tokio::{
         sync::{Notify, mpsc, oneshot},
         time::timeout,
@@ -1147,14 +1145,17 @@ mod tests {
 
     fn capture_agent(
         sender: mpsc::UnboundedSender<CapturedRequest>,
-        context: AgentContext,
+        context: TurnContext,
     ) -> (Nanocodex, AgentEvents) {
         let openai = OpenAi::builder("test-key")
             .service(move || CaptureService(sender.clone()))
             .build()
             .unwrap();
         Nanocodex::builder(openai)
-            .model(context.model)
+            .model(match context.model {
+                AgentModel::OpenAi(model) => model,
+                AgentModel::Claude(_) => unreachable!("worker tests use OpenAI models"),
+            })
             .thinking(context.thinking)
             .build()
             .unwrap()
@@ -1305,8 +1306,8 @@ mod tests {
             .unwrap();
         finished(&mut updates, TurnId::new(5)).await;
 
-        let replacement_context = AgentContext {
-            model: Model::Sol,
+        let replacement_context = TurnContext {
+            model: AgentModel::OpenAi(Model::Sol),
             thinking: Thinking::Medium,
         };
         let (replacement, mut replacement_events) = capture_agent(sender, replacement_context);
@@ -1430,8 +1431,8 @@ mod tests {
         }
     }
 
-    const TEST_CONTEXT: AgentContext = AgentContext {
-        model: Model::Astra,
+    const TEST_CONTEXT: TurnContext = TurnContext {
+        model: AgentModel::OpenAi(Model::Astra),
         thinking: Thinking::Low,
     };
 
