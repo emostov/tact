@@ -1694,9 +1694,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2548,10 +2550,10 @@ dependencies = [
 [[package]]
 name = "nanocodex"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a279aa71a2252924b62aeb28362daac0e173c8b1a7e3487322d47218a21cb80f"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "nanocodex-agent",
+ "nanocodex-claude",
  "nanocodex-durability",
  "nanocodex-managed",
  "nanocodex-oai-api",
@@ -2561,8 +2563,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-agent"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f72ac3ce6b17c9cbcfa6858d61984715ea653e5cb1c7b298bc0eb0455e29e600"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2582,12 +2583,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "nanocodex-claude"
+version = "0.6.6"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.4.3",
+ "nanocodex-agent",
+ "nanocodex-tools",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+ "uuid",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
 name = "nanocodex-durability"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f27267b17faae391812ab36098a2579c08e843fbb7267fddb67a9d224c7bd4d8"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "nanocodex-agent",
+ "nanocodex-claude",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2600,8 +2623,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-managed"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cac29c33ea5e4a1a418c98e6a6625ce4b4d95fd8b288ac011a6a66b83dd4f303"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "futures-util",
  "nanocodex-agent",
@@ -2625,8 +2647,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-oai-api"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d97d6eccdff94a979e99c377cdf394edb10bfa92e7567b2ed40e57d46fc1385"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2640,6 +2661,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.0",
  "smallvec",
  "symphonia",
@@ -2656,8 +2678,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "056b3bb2c44063c9986b08b84d8cbaf0c4d875bd355446f801afe8bbb1d65bdf"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2671,6 +2692,7 @@ dependencies = [
  "nix 0.31.3",
  "oauth2",
  "portable-pty",
+ "regex",
  "reqwest",
  "rmcp",
  "rquickjs",
@@ -2680,7 +2702,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "symphonia",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
@@ -2693,8 +2714,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools-macros"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a43713464faa6b4bd70d8d94591f8dfa2c31e2625bcbfe1b27df980c1948766"
+source = "git+https://github.com/gakonst/nanocodex?rev=3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd#3d9c1e3b1450a7551e9ce5d55cd5e3a25a7513cd"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
