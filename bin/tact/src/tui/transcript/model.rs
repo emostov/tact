@@ -399,6 +399,12 @@ impl TranscriptModel {
             "assistant.message" => self.assistant_message(record),
             "reasoning.summary.delta" => self.reasoning_delta(record),
             "run.started" => {
+                // Model call indexes are only unique within a run: Claude restarts them at zero
+                // on every turn. Forget finished runs' streams so a new turn cannot append to them.
+                if self.active_runs == 0 {
+                    self.assistants.clear();
+                    self.active_assistants.clear();
+                }
                 self.active_runs = self.active_runs.saturating_add(1);
                 self.run_started_at_unix_ms
                     .push_back(record.recorded_at_unix_ms());
@@ -1658,6 +1664,33 @@ mod tests {
             &model.entries()[0].kind,
             EntryKind::Assistant { text, complete: true, .. } if text == "hello"
         ));
+    }
+
+    #[test]
+    fn turns_that_restart_model_call_indexes_keep_separate_messages() {
+        let mut model = TranscriptModel::default();
+        for text in ["first", "second"] {
+            model.apply(&agent(AgentEventKind::RunStarted, json!({})));
+            model.apply(&agent(
+                AgentEventKind::AssistantDelta,
+                json!({"model_call_index": 1, "item_id": null, "phase": null, "text": text}),
+            ));
+            model.apply(&agent(
+                AgentEventKind::AssistantMessage,
+                json!({"model_call_index": 1, "item_id": text, "phase": null, "text": text}),
+            ));
+            model.apply(&agent(AgentEventKind::RunCompleted, json!({})));
+        }
+
+        let texts = model
+            .entries()
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                EntryKind::Assistant { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["first", "second"]);
     }
 
     #[test]
